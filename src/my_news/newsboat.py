@@ -100,41 +100,112 @@ def parse_since(spec: str) -> int:
     return n * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
 
 
-def fetch_unread(paths: Paths, *, since_seconds: int | None = None) -> list[dict[str, Any]]:
+def fetch_items(
+    paths: Paths,
+    *,
+    unread_only: bool = False,
+    since_seconds: int | None = None,
+    feed_filter: str | None = None,
+    limit: int | None = None,
+    full_content: bool = False,
+) -> list[dict[str, Any]]:
+    """Query rss_item with optional filters. feed_filter matches feed title or URL (case-insensitive substring)."""
     if not paths.cache.is_file():
         return []
     with sqlite3.connect(paths.cache) as conn:
         conn.row_factory = sqlite3.Row
-        query = """
-            SELECT i.id, i.title, i.url, i.author, i.pubDate, i.content,
-                   i.feedurl, f.title AS feed_title, f.rssurl
-            FROM rss_item i
-            JOIN rss_feed f ON i.feedurl = f.rssurl
-            WHERE i.unread = 1 AND i.deleted = 0
-        """
+        clauses = ["i.deleted = 0"]
         params: list[Any] = []
+        if unread_only:
+            clauses.append("i.unread = 1")
         if since_seconds is not None:
             cutoff = int(datetime.now(tz=timezone.utc).timestamp()) - since_seconds
-            query += " AND i.pubDate >= ?"
+            clauses.append("i.pubDate >= ?")
             params.append(cutoff)
-        query += " ORDER BY i.pubDate DESC"
+        if feed_filter:
+            clauses.append("(LOWER(f.title) LIKE ? OR LOWER(f.rssurl) LIKE ?)")
+            needle = f"%{feed_filter.lower()}%"
+            params.extend([needle, needle])
+        query = f"""
+            SELECT i.id, i.title, i.url, i.author, i.pubDate, i.content,
+                   i.unread, i.feedurl, f.title AS feed_title, f.rssurl
+            FROM rss_item i
+            JOIN rss_feed f ON i.feedurl = f.rssurl
+            WHERE {' AND '.join(clauses)}
+            ORDER BY i.pubDate DESC
+        """
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
         rows = conn.execute(query, params).fetchall()
 
     tag_map = _read_tag_map(paths.urls)
-    items = []
-    for r in rows:
-        items.append({
-            "id": r["id"],
-            "title": r["title"] or "(无标题)",
-            "url": r["url"],
-            "author": r["author"] or None,
-            "pub_date": unix_to_iso(r["pubDate"]),
-            "content_text": html_to_text(r["content"] or ""),
-            "feed_title": r["feed_title"] or r["rssurl"],
-            "feed_url": r["rssurl"],
-            "tags": tag_map.get(r["rssurl"], []),
-        })
-    return items
+    max_chars = None if full_content else 4000
+    return [_row_to_item(r, tag_map, max_chars=max_chars) for r in rows]
+
+
+def fetch_unread(paths: Paths, *, since_seconds: int | None = None) -> list[dict[str, Any]]:
+    return fetch_items(paths, unread_only=True, since_seconds=since_seconds)
+
+
+def fetch_one(paths: Paths, identifier: str) -> dict[str, Any] | None:
+    """Look up a single item by integer id or by URL match (case-insensitive exact)."""
+    if not paths.cache.is_file():
+        return None
+    with sqlite3.connect(paths.cache) as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            int_id = int(identifier)
+        except ValueError:
+            int_id = None
+
+        if int_id is not None:
+            row = conn.execute(
+                """
+                SELECT i.id, i.title, i.url, i.author, i.pubDate, i.content,
+                       i.unread, i.feedurl, f.title AS feed_title, f.rssurl
+                FROM rss_item i
+                JOIN rss_feed f ON i.feedurl = f.rssurl
+                WHERE i.id = ? AND i.deleted = 0
+                """,
+                (int_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT i.id, i.title, i.url, i.author, i.pubDate, i.content,
+                       i.unread, i.feedurl, f.title AS feed_title, f.rssurl
+                FROM rss_item i
+                JOIN rss_feed f ON i.feedurl = f.rssurl
+                WHERE LOWER(i.url) = LOWER(?) AND i.deleted = 0
+                LIMIT 1
+                """,
+                (identifier,),
+            ).fetchone()
+
+    if row is None:
+        return None
+    tag_map = _read_tag_map(paths.urls)
+    return _row_to_item(row, tag_map, max_chars=None)
+
+
+def _row_to_item(row: sqlite3.Row, tag_map: dict[str, list[str]], *, max_chars: int | None) -> dict[str, Any]:
+    raw_html = row["content"] or ""
+    item: dict[str, Any] = {
+        "id": row["id"],
+        "title": row["title"] or "(无标题)",
+        "url": row["url"],
+        "author": row["author"] or None,
+        "pub_date": unix_to_iso(row["pubDate"]),
+        "unread": bool(row["unread"]),
+        "content_text": html_to_text(raw_html, max_chars=max_chars),
+        "feed_title": row["feed_title"] or row["rssurl"],
+        "feed_url": row["rssurl"],
+        "tags": tag_map.get(row["rssurl"], []),
+    }
+    if max_chars is None:
+        item["content_html"] = raw_html
+    return item
 
 
 def mark_read(paths: Paths, ids: list[int]) -> None:

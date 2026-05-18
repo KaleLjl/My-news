@@ -1,26 +1,58 @@
 ---
 name: my-news
-description: 拉取用户订阅的一手 RSS 源里的未读条目，整理成中文深度简报。用于"看看今天/最近有什么新东西"。触发：用户提到"简报"、"news digest"、"看看 RSS"、"my-news"、"今日新闻"、"有什么新的"、"刷一下源"等，或直接 /my-news。
+description: 拉取用户订阅的一手 RSS 源里的内容，按需整理成中文简报、列出全量条目、或返回某条原文。触发：用户提到"简报"、"news digest"、"看看 RSS"、"my-news"、"今日新闻"、"有什么新的"、"刷一下源"、"列出文章"、"给我 X 的原文"、"总结 X 这一条"等，或直接 /my-news。
 ---
 
 # my-news — 一手 RSS 简报
 
-用户在 `~/Workspace/my-news/` 维护了一份 RSS 源列表，希望由 agent 定期拉取并整理成深度简报。本 skill 负责：调 CLI 拉数据 → 判断是否有更新 → 整理成结构化中文简报 → 可选写到 digests/ 供推送使用。
+用户在 `~/Workspace/my-news/` 维护了一份 RSS 源列表。本 skill 调 CLI 拿数据，按用户意图分支为三种动作：**简报**（新内容深度整理）、**列表**（罗列已抓取的所有条目，不消耗 unread 状态）、**取单条**（按 id/URL 拿完整原文）。
 
-## 工作流
+## 三个 CLI 子命令
 
-### 1. 拉取数据
+所有命令都在 `~/Workspace/my-news/` 下用 `uv run my-news ...` 调。
+
+### `fetch` — 新内容简报用
 
 ```bash
-cd ~/Workspace/my-news && uv run my-news fetch
+uv run my-news fetch [--no-reload] [--no-mark] [--since 24h]
 ```
 
-- 默认会先调 newsboat reload（网络刷新），再读 SQLite 缓存里所有 unread 条目，输出到 stdout 的 JSON，并把这些条目标记为已读。
-- 如果用户只是想预览不想"消费"，加 `--no-mark`。
-- 如果用户想看最近 N 时间内的，加 `--since 24h` / `--since 7d` 等。
-- 如果用户想立刻看（不等 reload），加 `--no-reload`。
+- 默认：newsboat reload → 输出所有 unread 条目 JSON → **标记已读**
+- 用于"看看今天有什么新的" / 定时简报
+- 输出中 `content_text` 截到 4000 字符
 
-CLI 输出 JSON 结构：
+### `list` — 罗列已抓取的条目（不消耗 unread）
+
+```bash
+uv run my-news list [--no-reload] [--feed QUERY] [--limit N] [--since 24h] [--unread-only]
+```
+
+- 不过滤 unread，能看到所有还在缓存里的条目（包括已读历史）
+- `--feed simon` 按源标题或 URL 子串过滤（不区分大小写）
+- `--limit 50` 默认上限
+- **不会**标记任何条目已读
+- 用于"列出 simonw 最近 30 条" / "看看缓存里都有什么"
+
+### `show` — 取单条完整原文
+
+```bash
+uv run my-news show <id|url>
+```
+
+- 参数可以是数字 id（来自 `fetch`/`list` 的 `id` 字段），也可以是文章 URL
+- 返回单条 JSON，**`content_text` 不截断**，并多带一个 `content_html` 原始 HTML
+- 找不到时退出码 1 + `{"error": "not_found", "identifier": "..."}`
+- 用于"把第 X 条的原文给我" / "把 https://... 这篇展开"
+
+### `feeds` — 已配置的源
+
+```bash
+uv run my-news feeds
+```
+
+## 输出 JSON 形状
+
+`fetch` 和 `list`：
 
 ```json
 {
@@ -29,27 +61,47 @@ CLI 输出 JSON 结构：
   "feed_count": <数字>,
   "by_feed": {
     "<源标题>": [
-      {"title": "...", "url": "...", "author": "...", "pub_date": "...",
-       "content_text": "去 HTML 的正文，~4000 字符",
+      {"id": <数字>, "title": "...", "url": "...", "author": "...",
+       "pub_date": "ISO", "unread": true|false,
+       "content_text": "去 HTML 的正文（截到 4000 字符）",
        "feed_url": "...", "tags": ["..."]}
     ]
   }
 }
 ```
 
-### 2. 空检查 — 这是关键
+`show` 单条额外带 `"content_html": "<原始 HTML>"`，且 `content_text` 完整不截。
 
-如果 `count == 0`：
+## 分支决策：用户想要什么？
+
+| 用户意图 | 用哪个命令 |
+|---|---|
+| "看看今天的新闻" / "刷一下" / "/my-news" | `fetch` |
+| "看看最近 24 小时" | `fetch --since 24h` |
+| "预览一下，先别标已读" | `fetch --no-mark` |
+| "列一下 cloudflare 的所有文章" / "罗列 simonw 最近 20 条" | `list --feed <name> --limit 20` |
+| "看看缓存里都有什么" / "全部列出来" | `list --limit 100` |
+| "把第 N 条 / 标题为 X 的原文给我" | 从上次 fetch/list 找到对应 `id` → `show <id>` |
+| "https://xxx 这篇是什么" | `show <url>` |
+| "总结一下 [某条]" | `show <id>` 拿到完整 `content_text` → 用 LLM 总结 |
+| "我都订了什么源" | `feeds` |
+| "新加一个源" | 提醒编辑 `feeds/urls`（newsboat 格式：URL + 可选 "tag1" "tag2"） |
+
+**关键点**：`fetch` 会"消耗" unread 状态。如果用户只是想浏览/查询/取原文，**优先用 `list` 和 `show`**，不要用 `fetch`。
+
+## 简报输出格式（仅 `fetch` 路径）
+
+### 空检查
+
+`count == 0` 时输出：
 
 ```
 📭 没有新内容（最近一次刷新：<fetched_at>）
 ```
 
-**直接结束，不要调任何 LLM 能力做"假装总结"或编造内容**。这是为了：(a) 不浪费 token，(b) 让 Hermes 这种调度器能靠 stdout 是否包含"没有新内容"判断要不要推送。
+**直接结束，不调 LLM 生成内容**。这让 Hermes 这种调度器能靠是否包含"没有新内容"判断要不要推送。
 
-### 3. 整理成简报
-
-当 `count > 0` 时，按下面的结构输出中文 Markdown 简报：
+### 有内容时的简报结构
 
 ```markdown
 # 📰 my-news 简报 · <YYYY-MM-DD HH:MM>
@@ -58,61 +110,89 @@ CLI 输出 JSON 结构：
 
 ## 🎯 今日要点
 
-跨源提炼 3-5 条最重要的更新，每条 1 句话讲清楚是什么 + 为什么值得注意。附原文链接。
+跨源提炼 3-5 条最重要的更新，每条 1 句话讲清楚是什么 + 为什么值得注意。
 
 - **<要点标题>**：<一句话本质>。([来源](URL))
 
 ## 📚 分主题
 
-如果多条围绕同一话题（例如多个 AI 实验室同时发模型、多家公司在讨论同一技术），把它们合并讲，对比异同。每个主题 1-2 段。
-
-如果没有明显的跨源主题，跳过本节。
+如果多条围绕同一话题，合并讲、对比异同。没有跨源主题就跳过。
 
 ## 📰 按源全量
 
-每个源下，按 pub_date 倒序列出所有新条目，给 1-2 句中文摘要 + 原文链接。摘要要点出"做了什么/发现了什么/结论是什么"，不要复读标题。
+每个源下按 pub_date 倒序列出所有新条目，给 1-2 句中文摘要 + 原文链接。
 
 ### <源标题> (<n> 条)
 
-- **<原标题翻译或保留>** · <pub_date 简化>  
+- **<标题>** · <pub_date 简化>  
   <中文摘要 1-2 句>  
-  [原文](URL)
+  [原文](URL) · `id: <id>`
 
 ## 🔖 推荐精读
 
-挑 2-3 条最值得点开看完的，每条说明"为什么推荐"。这帮用户决定时间投在哪。
+挑 2-3 条最值得点开看完的，说明"为什么推荐"。
 ```
 
-### 4. 写入文件（推荐做）
+**带上 `id`**：让用户后续可以说"给我 id 1042 的原文"，skill 直接调 `show 1042`。
 
-简报写到聊天同时，也写一份到：
+### 写到文件
+
+简报输出到聊天同时，写一份到：
 
 ```
 ~/Workspace/my-news/digests/<YYYY-MM-DD-HHMM>.md
 ```
 
-这个路径稳定可预测，方便用户的调度器（Hermes 之类）`cat` 后推送到手机。
+路径稳定可预测，方便调度器 `cat` 后推送。
 
-## 写简报的风格要求
+## 列表输出格式（`list` 路径）
 
-- **中文输出**，标题可保留原文（特别是技术名词、产品名）。
-- **信息密度高**：每句话都要有信息量，不要"近期 X 公司发布了关于 Y 的内容"这种空话。
-- **可扫读**：用 bullet、加粗、清晰的小节标题，让用户 30 秒能抓住重点。
-- **不编造**：只依据 `content_text` 提供的内容总结。如果某条 content_text 太短（比如 HN 那种只有 metadata），就照实说"原文需点开看"，不要瞎编。
-- **链接保留**：每条都带 `url` 字段的链接，让用户能跳过去看原文。
-- **去噪**：HN frontpage 这种源经常有杂项（mapping/blog spam），可以在"按源全量"里照常列，但**别**把它们放进"今日要点"。要点必须是有真实信息量的。
+```markdown
+# 📋 my-news 列表 · 共 <count> 条
+<过滤条件回显：feed=xxx limit=N since=24h>
+
+## <源标题> (<n> 条)
+
+- `[id: 1042]` **<标题>** · <pub_date> · <unread ? "🆕" : "✓">  
+  <如果 content_text 够长，给一句话摘要；不够长就略>  
+  [原文](URL)
+```
+
+列表模式**不**写 digests 文件、**不**生成深度简报、**不**做跨源主题分析 — 这是"目录索引"，不是简报。
+
+## 单条原文输出格式（`show` 路径）
+
+```markdown
+# 📄 <标题>
+
+- **源**：<feed_title>
+- **作者**：<author>
+- **发布**：<pub_date>
+- **URL**：<url>
+- **状态**：<unread ? "未读" : "已读">
+- **标签**：<tags>
+
+---
+
+<content_text 全文，原样保留分段>
+```
+
+如果 `content_text` 极短（< 200 字符，像 HN 那种只有 metadata 的源），不要瞎编，照实告诉用户：
+
+> ⚠️ RSS 只提供了 metadata，原文需要点开 [URL](...) 看。需要的话我可以调用 `baoyu-url-to-markdown` 帮你抓取网页正文。
+
+## 简报风格要求（仅 fetch 路径）
+
+- **中文输出**，标题可保留原文（特别是技术名词、产品名）
+- **信息密度高**：每句话都要有信息量，避免"近期 X 公司发布了关于 Y 的内容"这种空话
+- **可扫读**：bullet、加粗、清晰小节，30 秒能抓住重点
+- **不编造**：只依据 `content_text`。content_text 太短就照实说"原文需点开看"
+- **链接保留**：每条都带 `url` 链接
+- **去噪**：HN 这种源经常有杂项，可在"按源全量"列，但**别**进"今日要点"
 
 ## 错误处理
 
-- 如果 `uv run my-news fetch` 自身失败（非 0 退出，stderr 有内容），先把错误告诉用户，**不要**继续编造简报。
-- 如果 stderr 有内容但 stdout 也有有效 JSON（newsboat 部分源失败的情况），继续做简报，但在末尾加一行"⚠️ 部分源刷新有问题，详见 `data/last-error.log`"。
-- 如果 JSON parse 失败，原样输出 stdout 头 20 行帮助用户排查。
-
-## 用户可能的请求变体
-
-- "看看今天的新闻" → 直接 `fetch`
-- "看看最近 24 小时" → `fetch --since 24h`
-- "预览一下，先别标已读" → `fetch --no-mark`
-- "现在就看，别等网络" → `fetch --no-reload`
-- "我都订了什么源" → `uv run my-news feeds`
-- "新加一个源 https://..." → 提醒用户编辑 `feeds/urls`，附上 newsboat 格式说明（URL + 可选 "tag1" "tag2"）
+- CLI 自身失败（非 0 退出）：先告诉用户错误，**不要**编造内容
+- `show` 返回 `not_found`：告诉用户没找到，建议先 `list` 看 id
+- stderr 有内容但 stdout 有有效 JSON：继续做简报/列表，末尾加"⚠️ 部分源刷新有问题，详见 `data/last-error.log`"
+- JSON parse 失败：输出 stdout 头 20 行帮助排查

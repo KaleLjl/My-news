@@ -32,6 +32,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Only items with pubDate within DURATION (e.g. 24h, 30m, 7d).",
     )
 
+    listcmd = sub.add_parser(
+        "list",
+        help="List items from the cache without the unread filter (does not mark anything).",
+    )
+    listcmd.add_argument("--feed", metavar="QUERY", help="Filter by feed title or URL (case-insensitive substring).")
+    listcmd.add_argument("--limit", type=int, default=50, help="Max items to return (default 50).")
+    listcmd.add_argument("--since", metavar="DURATION", help="Only items within DURATION (e.g. 24h, 7d).")
+    listcmd.add_argument("--unread-only", action="store_true", help="Restrict to unread items.")
+    listcmd.add_argument("--no-reload", action="store_true", help="Skip newsboat reload; read DB only.")
+
+    show = sub.add_parser(
+        "show",
+        help="Show one item's full content (no truncation). Argument is either the item id or its URL.",
+    )
+    show.add_argument("identifier", help="Item id (integer) or full URL.")
+
     sub.add_parser("feeds", help="List configured feeds (from feeds/urls).")
     return parser
 
@@ -61,6 +77,57 @@ def _cmd_fetch(args: argparse.Namespace, paths: nb.Paths) -> int:
     return 0
 
 
+def _cmd_list(args: argparse.Namespace, paths: nb.Paths) -> int:
+    since_seconds = nb.parse_since(args.since) if args.since else None
+
+    if not args.no_reload:
+        nb.reload_feeds(paths)
+
+    items = nb.fetch_items(
+        paths,
+        unread_only=args.unread_only,
+        since_seconds=since_seconds,
+        feed_filter=args.feed,
+        limit=args.limit,
+    )
+    by_feed = nb.group_by_feed(items)
+    json.dump(
+        {
+            "fetched_at": datetime.now(tz=timezone.utc).astimezone().isoformat(),
+            "count": len(items),
+            "feed_count": len(by_feed),
+            "filter": {
+                "feed": args.feed,
+                "since": args.since,
+                "unread_only": args.unread_only,
+                "limit": args.limit,
+            },
+            "by_feed": by_feed,
+        },
+        sys.stdout,
+        ensure_ascii=False,
+        indent=2,
+    )
+    sys.stdout.write("\n")
+    return 0
+
+
+def _cmd_show(args: argparse.Namespace, paths: nb.Paths) -> int:
+    item = nb.fetch_one(paths, args.identifier)
+    if item is None:
+        json.dump(
+            {"error": "not_found", "identifier": args.identifier},
+            sys.stdout,
+            ensure_ascii=False,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+        return 1
+    json.dump(item, sys.stdout, ensure_ascii=False, indent=2)
+    sys.stdout.write("\n")
+    return 0
+
+
 def _cmd_feeds(_args: argparse.Namespace, paths: nb.Paths) -> int:
     feeds = nb.list_feeds(paths)
     json.dump(
@@ -80,6 +147,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "fetch":
         return _cmd_fetch(args, paths)
+    if args.command == "list":
+        return _cmd_list(args, paths)
+    if args.command == "show":
+        return _cmd_show(args, paths)
     if args.command == "feeds":
         return _cmd_feeds(args, paths)
     raise SystemExit(f"Unknown command: {args.command}")

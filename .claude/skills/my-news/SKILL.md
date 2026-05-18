@@ -1,0 +1,1 @@
+/Users/lijialei/Workspace/my-news/skills/my-news/SKILL.md
