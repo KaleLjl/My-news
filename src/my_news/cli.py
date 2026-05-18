@@ -47,6 +47,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Show one item's full content (no truncation). Argument is either the item id or its URL.",
     )
     show.add_argument("identifier", help="Item id (integer) or full URL.")
+    show.add_argument(
+        "--full",
+        action="store_true",
+        help="Also fetch the article URL and extract readable body via trafilatura (cached after first run).",
+    )
+    show.add_argument(
+        "--refresh",
+        action="store_true",
+        help="With --full, ignore the cached extraction and re-fetch.",
+    )
 
     sub.add_parser("feeds", help="List configured feeds (from feeds/urls).")
     return parser
@@ -123,9 +133,35 @@ def _cmd_show(args: argparse.Namespace, paths: nb.Paths) -> int:
         )
         sys.stdout.write("\n")
         return 1
+
+    if args.full:
+        item["extracted"] = _resolve_extracted(paths, item, refresh=args.refresh)
+
     json.dump(item, sys.stdout, ensure_ascii=False, indent=2)
     sys.stdout.write("\n")
     return 0
+
+
+def _resolve_extracted(paths: nb.Paths, item: dict, *, refresh: bool) -> dict:
+    from . import extract as ex
+
+    if not refresh:
+        cached = nb.get_cached_extract(paths, item["id"])
+        if cached is not None:
+            return {**cached, "source": "cache"}
+
+    result = ex.extract_article(item["url"])
+    nb.save_extract(
+        paths,
+        item_id=item["id"],
+        url=item["url"],
+        status=result.status,
+        text=result.text,
+        length=result.length,
+    )
+    cached = nb.get_cached_extract(paths, item["id"])
+    assert cached is not None
+    return {**cached, "source": "fresh"}
 
 
 def _cmd_feeds(_args: argparse.Namespace, paths: nb.Paths) -> int:

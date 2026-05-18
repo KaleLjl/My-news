@@ -19,7 +19,7 @@ uv run my-news fetch [--no-reload] [--no-mark] [--since 24h]
 
 - 默认：newsboat reload → 输出所有 unread 条目 JSON → **标记已读**
 - 用于"看看今天有什么新的" / 定时简报
-- 输出中 `content_text` 截到 4000 字符
+- `content_text` 完整不截断（RSS 给多少就是多少）
 
 ### `list` — 罗列已抓取的条目（不消耗 unread）
 
@@ -36,12 +36,23 @@ uv run my-news list [--no-reload] [--feed QUERY] [--limit N] [--since 24h] [--un
 ### `show` — 取单条完整原文
 
 ```bash
-uv run my-news show <id|url>
+uv run my-news show <id|url> [--full] [--refresh]
 ```
 
 - 参数可以是数字 id（来自 `fetch`/`list` 的 `id` 字段），也可以是文章 URL
-- 返回单条 JSON，**`content_text` 不截断**，并多带一个 `content_html` 原始 HTML
-- 找不到时退出码 1 + `{"error": "not_found", "identifier": "..."}`
+- 默认返回 RSS 自带内容：单条 JSON，`content_text` 完整 + 多带 `content_html` 原始 HTML（fetch/list 不带 html）
+- `--full`：另外去抓**文章 URL** 用 trafilatura 抽正文（Markdown 格式），结果缓存在 `extracted_content` 表里，第二次秒回。返回结构里多一个 `extracted` 字段：
+  ```json
+  "extracted": {
+    "status": "ok|fetch_failed|extract_failed|empty",
+    "source": "cache|fresh",
+    "fetched_at": "ISO",
+    "length": <数字>,
+    "text": "<Markdown 正文>"
+  }
+  ```
+- `--refresh`：强制重抓覆盖缓存
+- 找不到 id/url 时退出码 1 + `{"error": "not_found", ...}`
 - 用于"把第 X 条的原文给我" / "把 https://... 这篇展开"
 
 ### `feeds` — 已配置的源
@@ -63,14 +74,14 @@ uv run my-news feeds
     "<源标题>": [
       {"id": <数字>, "title": "...", "url": "...", "author": "...",
        "pub_date": "ISO", "unread": true|false,
-       "content_text": "去 HTML 的正文（截到 4000 字符）",
+       "content_text": "去 HTML 的正文（完整，不截断）",
        "feed_url": "...", "tags": ["..."]}
     ]
   }
 }
 ```
 
-`show` 单条额外带 `"content_html": "<原始 HTML>"`，且 `content_text` 完整不截。
+`show` 单条额外带 `"content_html": "<原始 HTML>"`。`content_text` 在所有命令里都是完整不截断的。
 
 ## 分支决策：用户想要什么？
 
@@ -81,9 +92,10 @@ uv run my-news feeds
 | "预览一下，先别标已读" | `fetch --no-mark` |
 | "列一下 cloudflare 的所有文章" / "罗列 simonw 最近 20 条" | `list --feed <name> --limit 20` |
 | "看看缓存里都有什么" / "全部列出来" | `list --limit 100` |
-| "把第 N 条 / 标题为 X 的原文给我" | 从上次 fetch/list 找到对应 `id` → `show <id>` |
-| "https://xxx 这篇是什么" | `show <url>` |
-| "总结一下 [某条]" | `show <id>` 拿到完整 `content_text` → 用 LLM 总结 |
+| "把第 N 条 / 标题为 X 的原文给我" | 从上次 fetch/list 找到对应 `id` → `show <id>`；若 `content_text` 太短（RSS 只给了 metadata）→ 自动追加 `show <id> --full` 抓网页正文 |
+| "https://xxx 这篇是什么" | `show <url> --full` |
+| "总结一下 [某条]" | `show <id> --full` 拿完整 `extracted.text` → 用 LLM 总结 |
+| "重新抓一下 X" | `show <id> --full --refresh`（绕过缓存）|
 | "我都订了什么源" | `feeds` |
 | "新加一个源" | 提醒编辑 `feeds/urls`（newsboat 格式：URL + 可选 "tag1" "tag2"） |
 
@@ -177,9 +189,7 @@ uv run my-news feeds
 <content_text 全文，原样保留分段>
 ```
 
-如果 `content_text` 极短（< 200 字符，像 HN 那种只有 metadata 的源），不要瞎编，照实告诉用户：
-
-> ⚠️ RSS 只提供了 metadata，原文需要点开 [URL](...) 看。需要的话我可以调用 `baoyu-url-to-markdown` 帮你抓取网页正文。
+如果 `content_text` 极短（< 200 字符，像 HN 那种只有 metadata 的源）：**立即追加 `show <id> --full`** 调 trafilatura 抓网页正文，然后用 `extracted.text` 而不是 `content_text` 渲染。如果 `extracted.status != "ok"`（fetch_failed / extract_failed / empty），再告诉用户原文抓不到、给原 URL 让他自己点。
 
 ## 简报风格要求（仅 fetch 路径）
 

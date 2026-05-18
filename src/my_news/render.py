@@ -40,8 +40,8 @@ class _TextExtractor(HTMLParser):
         return "\n".join(ln for ln in lines if ln)
 
 
-def html_to_text(html: str, *, max_chars: int | None = 4000) -> str:
-    """Convert HTML to plain text. Pass max_chars=None to disable truncation."""
+def html_to_text(html: str, *, max_chars: int | None = None) -> str:
+    """Convert HTML to plain text. Pass an int max_chars to enable truncation."""
     if not html:
         return ""
     parser = _TextExtractor()

@@ -107,7 +107,6 @@ def fetch_items(
     since_seconds: int | None = None,
     feed_filter: str | None = None,
     limit: int | None = None,
-    full_content: bool = False,
 ) -> list[dict[str, Any]]:
     """Query rss_item with optional filters. feed_filter matches feed title or URL (case-insensitive substring)."""
     if not paths.cache.is_file():
@@ -140,12 +139,75 @@ def fetch_items(
         rows = conn.execute(query, params).fetchall()
 
     tag_map = _read_tag_map(paths.urls)
-    max_chars = None if full_content else 4000
-    return [_row_to_item(r, tag_map, max_chars=max_chars) for r in rows]
+    return [_row_to_item(r, tag_map, include_html=False) for r in rows]
 
 
 def fetch_unread(paths: Paths, *, since_seconds: int | None = None) -> list[dict[str, Any]]:
     return fetch_items(paths, unread_only=True, since_seconds=since_seconds)
+
+
+_EXTRACTED_CONTENT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS extracted_content (
+    item_id INTEGER PRIMARY KEY,
+    url TEXT NOT NULL,
+    fetched_at INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    length INTEGER NOT NULL,
+    text TEXT NOT NULL
+)
+"""
+
+
+def _ensure_extracted_table(conn: sqlite3.Connection) -> None:
+    conn.execute(_EXTRACTED_CONTENT_SCHEMA)
+
+
+def get_cached_extract(paths: Paths, item_id: int) -> dict[str, Any] | None:
+    if not paths.cache.is_file():
+        return None
+    with sqlite3.connect(paths.cache) as conn:
+        conn.row_factory = sqlite3.Row
+        _ensure_extracted_table(conn)
+        row = conn.execute(
+            "SELECT url, fetched_at, status, length, text FROM extracted_content WHERE item_id = ?",
+            (item_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "status": row["status"],
+        "fetched_at": unix_to_iso(row["fetched_at"]),
+        "length": row["length"],
+        "text": row["text"],
+    }
+
+
+def save_extract(
+    paths: Paths,
+    item_id: int,
+    url: str,
+    *,
+    status: str,
+    text: str,
+    length: int,
+) -> None:
+    ts = int(datetime.now(tz=timezone.utc).timestamp())
+    with sqlite3.connect(paths.cache) as conn:
+        _ensure_extracted_table(conn)
+        conn.execute(
+            """
+            INSERT INTO extracted_content (item_id, url, fetched_at, status, length, text)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(item_id) DO UPDATE SET
+                url = excluded.url,
+                fetched_at = excluded.fetched_at,
+                status = excluded.status,
+                length = excluded.length,
+                text = excluded.text
+            """,
+            (item_id, url, ts, status, length, text),
+        )
+        conn.commit()
 
 
 def fetch_one(paths: Paths, identifier: str) -> dict[str, Any] | None:
@@ -186,10 +248,10 @@ def fetch_one(paths: Paths, identifier: str) -> dict[str, Any] | None:
     if row is None:
         return None
     tag_map = _read_tag_map(paths.urls)
-    return _row_to_item(row, tag_map, max_chars=None)
+    return _row_to_item(row, tag_map, include_html=True)
 
 
-def _row_to_item(row: sqlite3.Row, tag_map: dict[str, list[str]], *, max_chars: int | None) -> dict[str, Any]:
+def _row_to_item(row: sqlite3.Row, tag_map: dict[str, list[str]], *, include_html: bool) -> dict[str, Any]:
     raw_html = row["content"] or ""
     item: dict[str, Any] = {
         "id": row["id"],
@@ -198,12 +260,12 @@ def _row_to_item(row: sqlite3.Row, tag_map: dict[str, list[str]], *, max_chars: 
         "author": row["author"] or None,
         "pub_date": unix_to_iso(row["pubDate"]),
         "unread": bool(row["unread"]),
-        "content_text": html_to_text(raw_html, max_chars=max_chars),
+        "content_text": html_to_text(raw_html, max_chars=None),
         "feed_title": row["feed_title"] or row["rssurl"],
         "feed_url": row["rssurl"],
         "tags": tag_map.get(row["rssurl"], []),
     }
-    if max_chars is None:
+    if include_html:
         item["content_html"] = raw_html
     return item
 
