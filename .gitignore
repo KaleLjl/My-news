@@ -12,3 +12,7 @@ wheels/
 # Runtime data
 data/
 digests/
+
+# Claude Code local state
+.claude/worktrees/
+.claude/settings.local.json
