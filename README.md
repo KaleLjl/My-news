@@ -23,11 +23,35 @@ config/      ─┘                              │
 
 ## 安装
 
+### 一键脚本（推荐）
+
+克隆仓库后跑：
+
 ```bash
+bash skills/my-news/scripts/setup.sh
+```
+
+会依次：装 newsboat / uv → `uv sync` → 把 `skills/my-news/` symlink 到 `~/.claude/skills/my-news`。重跑无害。
+
+### 手动安装
+
+```bash
+# 1. 系统依赖
 brew install newsboat
 brew install uv          # 或者 pipx install uv
+
+# 2. Python 依赖
 uv sync
+
+# 3. 让 Claude Code 看到 skill
+mkdir -p ~/.claude/skills
+ln -s "$(pwd)/skills/my-news" ~/.claude/skills/my-news
+
+# 4. （可选）项目不在 ~/Workspace/my-news 时，固定路径
+echo 'export MY_NEWS_HOME="'"$(pwd)"'"' >> ~/.zshrc
 ```
+
+详细步骤、Linux 安装、排错速查见 [`skills/my-news/references/install.md`](skills/my-news/references/install.md)。
 
 ## CLI
 
