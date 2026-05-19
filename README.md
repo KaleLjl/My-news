@@ -47,8 +47,9 @@ uv sync
 mkdir -p ~/.claude/skills
 ln -s "$(pwd)/skills/my-news" ~/.claude/skills/my-news
 
-# 4. （可选）项目不在 ~/Workspace/my-news 时，固定路径
+# 4. 设置 MY_NEWS_HOME（必需，skill 靠这个找项目）
 echo 'export MY_NEWS_HOME="'"$(pwd)"'"' >> ~/.zshrc
+source ~/.zshrc
 ```
 
 详细步骤、Linux 安装、排错速查见 [`skills/my-news/references/install.md`](skills/my-news/references/install.md)。

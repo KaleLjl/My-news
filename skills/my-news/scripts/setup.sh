@@ -149,17 +149,56 @@ else
   ok "已链：$TARGET → $SKILL_DIR"
 fi
 
-# ---------- §6 MY_NEWS_HOME 提示 ----------
-say "最后一步：固定项目路径（可选但推荐）"
-DEFAULT_PROJECT="$HOME/Workspace/my-news"
-if [ "$PROJECT" != "$DEFAULT_PROJECT" ]; then
-  echo
-  warn "你的项目不在默认路径 $DEFAULT_PROJECT"
-  echo "  建议把下面这行加到 ~/.zshrc 或 ~/.bashrc，让 skill 每次都能秒定位："
-  echo
-  echo "    export MY_NEWS_HOME=\"$PROJECT\""
-  echo
+# ---------- §6 持久化 MY_NEWS_HOME ----------
+# skill 强制要 $MY_NEWS_HOME，所以不论项目放哪都得把它写进 shell rc，
+# 不然新 shell 一开就丢了。
+say "持久化 MY_NEWS_HOME（skill 强制依赖）"
+
+# 选 rc 文件：优先看 $SHELL，再退回 zsh 和 bash 都存在的那个
+RC_FILE=""
+case "${SHELL:-}" in
+  */zsh)  RC_FILE="$HOME/.zshrc" ;;
+  */bash) RC_FILE="$HOME/.bashrc" ;;
+esac
+if [ -z "$RC_FILE" ]; then
+  if [ -f "$HOME/.zshrc" ]; then RC_FILE="$HOME/.zshrc"
+  elif [ -f "$HOME/.bashrc" ]; then RC_FILE="$HOME/.bashrc"
+  else RC_FILE="$HOME/.zshrc"   # macOS 默认
+  fi
+fi
+
+EXPORT_LINE="export MY_NEWS_HOME=\"$PROJECT\""
+
+if [ -f "$RC_FILE" ] && grep -Fq "MY_NEWS_HOME" "$RC_FILE"; then
+  # rc 里已经有一行，看是不是指向同一个路径
+  EXISTING=$(grep -E '^[^#]*export[[:space:]]+MY_NEWS_HOME=' "$RC_FILE" | tail -1 || true)
+  if [[ "$EXISTING" == *"\"$PROJECT\""* ]] || [[ "$EXISTING" == *"=$PROJECT"* ]]; then
+    ok "$RC_FILE 里已经设过 MY_NEWS_HOME 且指向当前项目"
+  else
+    warn "$RC_FILE 里已有 MY_NEWS_HOME，但指向别的路径："
+    echo "  $EXISTING"
+    echo "  期望：$EXPORT_LINE"
+    echo "  请你自己确认要不要改（这个脚本不会动你旧的导出）"
+  fi
+else
+  echo "  准备把这行追加到 $RC_FILE："
+  echo "    $EXPORT_LINE"
+  read -rp "  追加？[Y/n] " ans
+  if [[ ! "$ans" =~ ^[Nn]$ ]]; then
+    {
+      echo ""
+      echo "# my-news skill"
+      echo "$EXPORT_LINE"
+    } >> "$RC_FILE"
+    ok "已写入 $RC_FILE"
+  else
+    warn "跳过了。你之后需要自己加，否则 skill 不会工作："
+    echo "  echo '$EXPORT_LINE' >> $RC_FILE"
+  fi
 fi
 
 echo
-ok "全部装好。进 Claude Code 试一下：/my-news"
+ok "全部装好。"
+echo "  · 当前 shell 立即生效（不用重开终端）："
+echo "      $EXPORT_LINE"
+echo "  · 进 Claude Code 试一下：/my-news"

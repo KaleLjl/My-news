@@ -110,17 +110,27 @@ ls -la ~/.claude/skills/my-news
 
 ---
 
-## 六、（可选）固定项目路径
+## 六、设置 `MY_NEWS_HOME`（必需）
 
-如果你**不是**把项目放在 `~/Workspace/my-news`，给 shell 加一行：
+skill 通过 `$MY_NEWS_HOME` 找项目本体——这是**唯一**的解析途径，没有这个变量就跑不起来。`setup.sh` 已经会自动追加这一行到 `~/.zshrc` / `~/.bashrc`。如果你是手动安装：
 
 ```bash
-# bash / zsh
-echo 'export MY_NEWS_HOME="$HOME/code/my-news"' >> ~/.zshrc
+# zsh
+echo 'export MY_NEWS_HOME="'"$(pwd)"'"' >> ~/.zshrc
 source ~/.zshrc
+
+# bash
+echo 'export MY_NEWS_HOME="'"$(pwd)"'"' >> ~/.bashrc
+source ~/.bashrc
 ```
 
-skill 的前置检查会优先读 `$MY_NEWS_HOME`，省掉每次自动探测。
+验证：
+
+```bash
+[ -n "$MY_NEWS_HOME" ] && [ -f "$MY_NEWS_HOME/pyproject.toml" ] && echo OK
+```
+
+输出 `OK` 才说明 skill 能用了。
 
 ---
 
