@@ -7,64 +7,84 @@
 ## 架构
 
 ```
-feeds/urls  ──┐
-              ├──> newsboat reload ──> data/cache.db ──> CLI 查询 ──> JSON
-config/      ─┘                              │
-                                             ├──> 标记已读 (fetch)
-                                             ├──> 只读不动 (list)
-                                             └──> 单条 + 可选抓网页 (show --full)
-                                                            │
-                                                            ▼
-                                          ~/.claude/skills/my-news (Claude Code)
-                                                            │
-                                                            ▼
-                                           简报 / 列表 / 原文 (chat + digests/*.md)
+~/.config/my-news/feeds/urls  ──┐
+~/.config/my-news/config/...   ─┤
+                                 ├──> newsboat reload ──> ~/.local/share/my-news/cache.db ──> CLI 查询 ──> JSON
+                                 │                              │
+                                 │                              ├──> 标记已读 (fetch)
+                                 │                              ├──> 只读不动 (list)
+                                 │                              └──> 单条 + 可选抓网页 (show --full)
+                                 │                                             │
+                                 │                                             ▼
+                                 │                            ~/.claude/skills/my-news (Claude Code)
+                                 │                                             │
+                                 │                                             ▼
+                                 │                              简报 / 列表 / 原文 (chat + ~/.local/share/my-news/digests/*.md)
+                                 │
+                              （可用 MY_NEWS_CONFIG / MY_NEWS_DATA 改默认位置）
 ```
+
+仓库 = **CLI 源码 + skill 源码**，不是"你必须把这个仓库本身留在本机"。终端用户只需要装 CLI（全局 tool）+ 装 skill（marketplace 或 cp）。
 
 ## 安装
 
-### 一键脚本（推荐）
-
-克隆仓库后跑：
-
-```bash
-bash skills/my-news/scripts/setup.sh
-```
-
-会依次：装 newsboat / uv → `uv sync` → 把 `skills/my-news/` symlink 到 `~/.claude/skills/my-news`。重跑无害。
-
-### 手动安装
+### 终端用户（推荐）
 
 ```bash
 # 1. 系统依赖
-brew install newsboat
-brew install uv          # 或者 pipx install uv
+brew install newsboat uv                 # macOS
+# 或 sudo apt install newsboat && curl -LsSf https://astral.sh/uv/install.sh | sh   # Linux
 
-# 2. Python 依赖
-uv sync
+# 2. CLI 当全局 tool 装（跟随 main 分支）
+uv tool install git+https://github.com/KaleLjl/my-news.git
 
-# 3. 让 Claude Code 看到 skill
+# 3. skill：通过 marketplace 装，或者从仓库 cp 一份
 mkdir -p ~/.claude/skills
-ln -s "$(pwd)/skills/my-news" ~/.claude/skills/my-news
-
-# 4. 设置 MY_NEWS_HOME（必需，skill 靠这个找项目）
-echo 'export MY_NEWS_HOME="'"$(pwd)"'"' >> ~/.zshrc
-source ~/.zshrc
+cp -r /path/to/this/repo/skills/my-news ~/.claude/skills/my-news
 ```
 
-详细步骤、Linux 安装、排错速查见 [`skills/my-news/references/install.md`](skills/my-news/references/install.md)。
+验证：
+
+```bash
+my-news --help        # CLI 在 PATH 上
+my-news paths         # 看默认 config / data 目录
+```
+
+详细步骤、Linux / 排错速查见 [`skills/my-news/references/install.md`](skills/my-news/references/install.md)。
+
+### 老用户：迁移数据
+
+如果你之前用过老版本（数据存在仓库目录里），跑一次：
+
+```bash
+my-news migrate --from /path/to/old/my-news-repo
+```
+
+把 `<repo>/data/cache.db`、`<repo>/feeds/urls` 等搬到 `~/.config/my-news/` 和 `~/.local/share/my-news/`。幂等：目标已存在则跳过。
+
+### CLI 贡献者：开发模式
+
+```bash
+git clone https://github.com/KaleLjl/my-news.git
+cd my-news
+uv sync
+uv run my-news --help
+
+# 改 skill 后用 cp 验证
+cp -r skills/my-news ~/.claude/skills/my-news
+```
 
 ## CLI
 
-四个子命令，所有输出都是 UTF-8 JSON（除 `feeds` 是文本）。
+五个子命令，所有输出都是 UTF-8 JSON（除 `feeds` 是文本）。
 
 ### `fetch` — 拉新内容（会标记已读）
 
 ```bash
-uv run my-news fetch
-uv run my-news fetch --no-reload     # 不联网刷新，只读缓存
-uv run my-news fetch --no-mark       # 预览，不消耗未读状态
-uv run my-news fetch --since 24h     # 只看最近 24 小时发布的
+my-news fetch
+my-news fetch --no-reload     # 不联网刷新，只读缓存
+my-news fetch --no-mark       # 预览，不消耗未读状态
+my-news fetch --since 24h     # 只看最近 24 小时发布的
 ```
 
 适合"看看今天有什么新的"或定时简报。
@@ -72,10 +92,10 @@ uv run my-news fetch --since 24h     # 只看最近 24 小时发布的
 ### `list` — 翻看缓存（不标记任何东西）
 
 ```bash
-uv run my-news list                                   # 缓存里最近 50 条
-uv run my-news list --feed simon --limit 20           # 源标题或 URL 子串过滤
-uv run my-news list --since 48h                       # 最近 48 小时
-uv run my-news list --unread-only                     # 只看未读
+my-news list                                   # 缓存里最近 50 条
+my-news list --feed simon --limit 20           # 源标题或 URL 子串过滤
+my-news list --since 48h                       # 最近 48 小时
+my-news list --unread-only                     # 只看未读
 ```
 
 适合"列出 simonw 最近 20 条"、"看看缓存里都有什么"。和 `fetch` 的关键区别：**绝不动 unread 状态**。
@@ -83,10 +103,10 @@ uv run my-news list --unread-only                     # 只看未读
 ### `show` — 取单条完整内容
 
 ```bash
-uv run my-news show 1042                              # 按 id（来自 fetch/list 的 id 字段）
-uv run my-news show https://example.com/post          # 按 URL
-uv run my-news show 1042 --full                       # 额外用 trafilatura 抓网页正文
-uv run my-news show 1042 --full --refresh             # 强制重抓，绕过缓存
+my-news show 1042                              # 按 id（来自 fetch/list 的 id 字段）
+my-news show https://example.com/post          # 按 URL
+my-news show 1042 --full                       # 额外用 trafilatura 抓网页正文
+my-news show 1042 --full --refresh             # 强制重抓，绕过缓存
 ```
 
 默认返回 RSS 自带内容（`content_text` + `content_html`）。加 `--full` 会去抓**文章 URL** 用 trafilatura 抽 Markdown 正文，结果存进 `extracted_content` 表第二次秒回。
@@ -96,14 +116,30 @@ uv run my-news show 1042 --full --refresh             # 强制重抓，绕过缓
 ### `feeds` — 列已配置的源
 
 ```bash
-uv run my-news feeds
+my-news feeds
 ```
+
+### `paths` — 看 CLI 解析出来的目录
+
+```bash
+my-news paths
+```
+
+返回 `config_dir` / `data_dir` / `feeds_file` / `cache_db` / `digests_dir` 等绝对路径。Skill 自己也用这个来知道往哪里写 digest。
+
+### `migrate` — 从老仓库布局搬数据
+
+```bash
+my-news migrate --from /path/to/old/repo
+```
+
+详见上面"老用户：迁移数据"一节。
 
 ## 在 Claude Code 里用
 
-仓库里带了 `.claude/skills/my-news/`，会被 Claude Code 自动识别。直接说：
+skill 装到 `~/.claude/skills/my-news/` 后会被 Claude Code 自动识别。直接说：
 
-- "看看今天的新闻" / "/my-news" → `fetch` 路径，出深度简报，落地到 `digests/<YYYY-MM-DD-HHMM>.md`
+- "看看今天的新闻" / "/my-news" → `fetch` 路径，出深度简报，落地到 `~/.local/share/my-news/digests/<YYYY-MM-DD-HHMM>.md`
 - "列出 cloudflare 的最近文章" → `list` 路径，目录式输出，不写文件
 - "把 id 1042 的原文给我" / "总结一下那条" → `show` 路径，必要时自动加 `--full`
 
@@ -152,7 +188,7 @@ skill 自己会判断走哪条分支，你不用 care 命令。
 
 ## 加 / 改源
 
-编辑 `feeds/urls`，newsboat 格式：
+编辑 `my-news paths` 返回的 `feeds_file`（默认 `~/.config/my-news/feeds/urls`），newsboat 格式：
 
 ```
 https://example.com/feed.xml             "tag1" "tag2"
@@ -163,24 +199,33 @@ https://another.example.com/atom.xml     "ai"
 
 ## 文件结构
 
+仓库本身（CLI 源码 + skill 源码）：
+
 | 路径 | 作用 |
 |---|---|
-| `feeds/urls` | RSS 源列表（newsboat 格式：URL + 可选 tag） |
-| `config/newsboat.conf` | newsboat 行为配置（缓存路径、超时等） |
-| `src/my_news/` | CLI 实现（仅依赖 stdlib + trafilatura） |
-| `.claude/skills/my-news/` | Claude Code skill，定义简报 / 列表 / 原文三种输出格式 |
-| `data/cache.db` | newsboat SQLite 缓存（自动生成、不进 git） |
-| `data/extracted.db` | trafilatura 抽取缓存（自动生成、不进 git） |
-| `data/last-error.log` | newsboat 刷新错误日志（per-feed 失败查这里） |
-| `digests/` | skill 写出的简报 markdown |
+| `src/my_news/` | CLI 实现（typer + newsboat + trafilatura） |
+| `skills/my-news/` | Claude Code skill，定义简报 / 列表 / 原文三种输出格式 |
+| `pyproject.toml` | 包元数据，定义 `my-news` 可执行入口 |
+
+运行时状态（默认走 XDG 用户目录，**不在仓库里**）：
+
+| 路径 | 作用 |
+|---|---|
+| `~/.config/my-news/feeds/urls` | RSS 源列表（newsboat 格式：URL + 可选 tag） |
+| `~/.config/my-news/config/newsboat.conf` | newsboat 行为配置（缓存路径、超时等） |
+| `~/.local/share/my-news/cache.db` | newsboat SQLite 缓存 + trafilatura 抽取缓存 |
+| `~/.local/share/my-news/last-error.log` | newsboat 刷新错误日志（per-feed 失败查这里） |
+| `~/.local/share/my-news/digests/` | skill 写出的简报 markdown |
+
+可以用 `MY_NEWS_CONFIG` / `MY_NEWS_DATA` 环境变量改默认位置。
 
 ## 调度推送
 
-CLI 是纯 stdout JSON，方便接任何调度器。两种常见用法：
+CLI 是纯 stdout JSON，方便接任何调度器：
 
 ```bash
 # 直接拿 JSON
-0 8 * * *  cd ~/Workspace/my-news && uv run my-news fetch > /tmp/news-$(date +\%F).json
+0 8 * * *  my-news fetch > /tmp/news-$(date +\%F).json
 
 # 触发 Claude Code skill 生成简报到 digests/，再推到 IM / 邮件
 0 8 * * *  claude code --skill my-news "今天的简报"

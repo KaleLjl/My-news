@@ -1,10 +1,12 @@
 """Wrap the newsboat CLI + read its SQLite cache."""
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -14,37 +16,106 @@ from typing import Any
 from .render import html_to_text, unix_to_iso
 
 
+_DEFAULT_URLS_TEMPLATE = """\
+# my-news feeds — one feed per line, newsboat format.
+# URL [optional "quoted tags"]
+# Example:
+# https://simonwillison.net/atom/everything/    "ai" "blog"
+"""
+
+
+def _xdg_dir(env_var: str, default: Path) -> Path:
+    raw = os.environ.get(env_var)
+    if raw:
+        return Path(raw).expanduser()
+    return default
+
+
+def default_config_dir() -> Path:
+    """`$MY_NEWS_CONFIG` if set, else `$XDG_CONFIG_HOME/my-news` (default `~/.config/my-news`)."""
+    override = os.environ.get("MY_NEWS_CONFIG")
+    if override:
+        return Path(override).expanduser()
+    base = _xdg_dir("XDG_CONFIG_HOME", Path.home() / ".config")
+    return base / "my-news"
+
+
+def default_data_dir() -> Path:
+    """`$MY_NEWS_DATA` if set, else `$XDG_DATA_HOME/my-news` (default `~/.local/share/my-news`)."""
+    override = os.environ.get("MY_NEWS_DATA")
+    if override:
+        return Path(override).expanduser()
+    base = _xdg_dir("XDG_DATA_HOME", Path.home() / ".local" / "share")
+    return base / "my-news"
+
+
 @dataclass
 class Paths:
-    root: Path
+    urls: Path
+    conf: Path
+    cache: Path
+    error_log: Path
+    digests: Path
 
     @property
-    def urls(self) -> Path:
-        return self.root / "feeds" / "urls"
+    def config_dir(self) -> Path:
+        return self.urls.parent.parent
 
     @property
-    def conf(self) -> Path:
-        return self.root / "config" / "newsboat.conf"
+    def data_dir(self) -> Path:
+        return self.cache.parent
 
-    @property
-    def cache(self) -> Path:
-        return self.root / "data" / "cache.db"
+    @classmethod
+    def from_env(cls) -> "Paths":
+        """User-dir layout (XDG): config under `~/.config/my-news`, data under `~/.local/share/my-news`."""
+        cfg = default_config_dir()
+        data = default_data_dir()
+        return cls(
+            urls=cfg / "feeds" / "urls",
+            conf=cfg / "config" / "newsboat.conf",
+            cache=data / "cache.db",
+            error_log=data / "last-error.log",
+            digests=data / "digests",
+        )
 
-    @property
-    def error_log(self) -> Path:
-        return self.root / "data" / "last-error.log"
+    @classmethod
+    def from_root(cls, root: Path) -> "Paths":
+        """Legacy in-repo layout. Kept behind `--root` for dev/test."""
+        return cls(
+            urls=root / "feeds" / "urls",
+            conf=root / "config" / "newsboat.conf",
+            cache=root / "data" / "cache.db",
+            error_log=root / "data" / "last-error.log",
+            digests=root / "digests",
+        )
 
 
-def find_project_root(start: Path | None = None) -> Path:
-    """Walk up until we find pyproject.toml. Falls back to ~/Workspace/my-news."""
-    here = (start or Path(__file__)).resolve()
+def ensure_feeds_file(paths: Paths) -> bool:
+    """Create an empty feeds/urls with a template if missing. Returns True if just created."""
+    if paths.urls.is_file():
+        return False
+    paths.urls.parent.mkdir(parents=True, exist_ok=True)
+    paths.urls.write_text(_DEFAULT_URLS_TEMPLATE, encoding="utf-8")
+    print(
+        f"[my-news] created empty feeds file at {paths.urls}\n"
+        f"          edit it to add your RSS sources (one per line), then re-run.",
+        file=sys.stderr,
+    )
+    return True
+
+
+def find_project_root(start: Path | None = None) -> Path | None:
+    """Walk up looking for a my-news repo (pyproject.toml with name='my-news'). Returns None if not found."""
+    here = (start or Path.cwd()).resolve()
     for parent in (here, *here.parents):
-        if (parent / "pyproject.toml").is_file():
-            return parent
-    fallback = Path.home() / "Workspace" / "my-news"
-    if (fallback / "pyproject.toml").is_file():
-        return fallback
-    raise RuntimeError("Could not locate my-news project root (pyproject.toml not found)")
+        pyproject = parent / "pyproject.toml"
+        if pyproject.is_file():
+            try:
+                if 'name = "my-news"' in pyproject.read_text(encoding="utf-8"):
+                    return parent
+            except OSError:
+                continue
+    return None
 
 
 def reload_feeds(paths: Paths, *, timeout: int = 120) -> None:
