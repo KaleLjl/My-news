@@ -1,11 +1,11 @@
 ---
 name: my-news
-description: 拉取用户订阅的一手 RSS 源里的内容，按需整理成中文简报、列出全量条目、或返回某条原文。触发：用户提到"简报"、"news digest"、"看看 RSS"、"my-news"、"今日新闻"、"有什么新的"、"刷一下源"、"列出文章"、"给我 X 的原文"、"总结 X 这一条"等，或直接 /my-news。
+description: 拉取用户订阅的一手 RSS 源里的内容，按需整理成中文简报、列出全量条目、或返回某条原文。触发：用户提到"简报"、"news digest"、"看看 RSS"、"my-news"、"今日新闻"、"有什么新的"、"刷一下源"、"列出文章"、"给我 X 的原文"、"总结 X 这一条"等，或斜杠/at 形式如 `/my-news`、`@my-news`。Agent 无关，Claude Code / Hermes / 其他 agent 都可用。
 ---
 
 # my-news — 一手 RSS 简报
 
-本 skill 是个壳，真正干活的是 PATH 上的 `my-news` CLI（基于 newsboat + trafilatura，状态走 XDG 用户目录）。根据用户意图分支为三种动作：**简报**（新内容深度整理）、**列表**（罗列已抓取的所有条目，不消耗 unread 状态）、**取单条**（按 id/URL 拿完整原文）。
+本 skill 是个壳，真正干活的是 PATH 上的 `my-news` CLI（基于 newsboat + trafilatura，状态走 XDG 用户目录）。**Agent 无关**：只要 CLI 在 PATH 上，Claude Code / Hermes / 其它能跑 shell 的 agent 都能用。根据用户意图分支为三种动作：**简报**（新内容深度整理）、**列表**（罗列已抓取的所有条目，不消耗 unread 状态）、**取单条**（按 id/URL 拿完整原文）；外加一个 **诊断**（`doctor`，查源是否还活着）。
 
 ## 0. 前置检查（每次会话首次触发时跑一次即可）
 
@@ -22,7 +22,8 @@ command -v my-news
 
   前置依赖（缺哪个补哪个）：
   - `uv`：`brew install uv`（macOS）或 `curl -LsSf https://astral.sh/uv/install.sh | sh`（其它）
-  - `newsboat`：`brew install newsboat`（macOS）/ `sudo apt install newsboat`（Debian/Ubuntu）/ `sudo pacman -S newsboat`（Arch）
+  - `newsboat`：`brew install newsboat`（macOS / Linuxbrew）/ `sudo apt install newsboat`（Debian / Ubuntu ≤22.04）/ `sudo pacman -S newsboat`（Arch）
+  - **Ubuntu 24.04+ 注意**：apt 源里没有 newsboat。详细方案（Linuxbrew 推荐 / snap + 环境变量 workaround / 源码编译）见 `references/install.md` §I.5。
 
   装完再走下一步，不需要重开 shell（`~/.local/bin` 已在 PATH 时 `my-news` 立即可用）。
 
@@ -138,6 +139,30 @@ my-news paths
 
 **关键点**：`fetch` 会"消耗" unread 状态。如果用户只是想浏览/查询/取原文，**优先用 `list` 和 `show`**，不要用 `fetch`。
 
+### 首次大 backlog 处理（防爆上下文）
+
+首次部署 / 长时间没刷 / 加了很多源时，`fetch` 可能一下子返回几百条，塞爆 LLM 窗口。**应当先侦察再决定**：
+
+1. **低成本侦察**（不消耗 unread、内容截断）：
+
+   ```bash
+   my-news fetch --no-mark --summary-only --limit 5
+   ```
+
+   只看返回 JSON 的 `count` 字段。
+
+2. **按 count 分级降级**：
+
+   | count | 怎么走 |
+   |---|---|
+   | `<= 50` | 正常 `my-news fetch`，全量整理 |
+   | `50 < count <= 200` | `my-news fetch --since 24h`，告诉用户"另有 N 条更老的，要不要追？" |
+   | `> 200` | `my-news fetch --since 24h --limit 50 --summary-only`，明确告诉用户在分批；剩余下次会话再处理 |
+
+3. **`--limit N` 的语义**：只输出最近 N 条 unread，**只对这 N 条 mark_read**，剩余 unread 保留供下次。所以分批安全，不会丢条目。
+
+4. **`--summary-only` 的语义**：每条 `content_text` 截断到 2000 字符（可用 `MY_NEWS_SUMMARY_MAX_CHARS` 调），并在 item 上加 `"content_text_truncated": true` 标记。需要全文：`show <id> --full`（trafilatura 抓网页正文）。
+
 ## 4. 简报输出格式（仅 `fetch` 路径）
 
 ### 空检查
@@ -148,7 +173,7 @@ my-news paths
 📭 没有新内容（最近一次刷新：<fetched_at>）
 ```
 
-**直接结束，不调 LLM 生成内容**。这让 Hermes 这种调度器能靠是否包含"没有新内容"判断要不要推送。
+**直接结束，不调 LLM 生成内容**。这让外部调度器（cron / systemd / Hermes 等）能靠是否包含"没有新内容"判断要不要推送。
 
 ### 有内容时的简报结构
 
@@ -176,6 +201,8 @@ my-news paths
 - **<标题>** · <pub_date 简化>  
   <中文摘要 1-2 句>  
   [原文](URL) · `id: <id>`
+
+如果某条 `content_text_truncated: true`（用了 `--summary-only`），摘要只写一句话 + 链接，注明"全文需 `show <id> --full`"，不要假装看完了全文。
 
 ## 🔖 推荐精读
 
@@ -246,7 +273,7 @@ my-news paths
 - `command not found: newsboat`（CLI 跑得动但 `fetch` 时报错）→ 提示用户装 newsboat
 - `show` 返回 `not_found`：告诉用户没找到，建议先 `list` 看 id
 - stderr 有内容但 stdout 有有效 JSON：继续做简报/列表，末尾加"⚠️ 部分源刷新有问题，详见 `my-news paths` 返回的 `error_log`"
-- JSON parse 失败：输出 stdout 头 20 行帮助排查
+- JSON parse 失败：输出 stdout 头 20 行帮助排查；如果 payload 巨大（单条 content 上万字）可重试 `--summary-only`
 
 ## 9. 环境变量覆盖（可选）
 
@@ -254,5 +281,29 @@ my-news paths
 
 - `MY_NEWS_CONFIG=/some/path` 改 config 根（feeds/urls + newsboat.conf 都在里头）
 - `MY_NEWS_DATA=/some/path` 改 data 根（cache.db + digests/ 都在里头）
+- `MY_NEWS_SUMMARY_MAX_CHARS=N` 改 `--summary-only` 的截断阈值（默认 2000）
 
-两个变量都是**可选**的；不设就用默认 XDG 路径。设置时请用户自己写进 shell rc，skill 不应该替用户改 rc。
+三个变量都是**可选**的；不设就用默认。设置时请用户自己写进 shell rc，skill 不应该替用户改 rc。
+
+## 10. 源健康检查（用户问"哪个源没数据"时）
+
+用户类似抱怨——"为什么 X 一直没东西"、"机器之心好像挂了"、"加了新源但 fetch 不到"——走 `doctor`：
+
+```bash
+my-news doctor              # 人类可读表格
+my-news doctor --json       # 机器可读 JSON
+my-news doctor --timeout 20 # 慢源放宽超时
+```
+
+输出每条源的：HTTP 状态、Content-Type、能不能 parse 成 RSS/Atom、item 数。状态分四种：
+
+| 状态 | 含义 | 给用户什么建议 |
+|---|---|---|
+| `ok` | 拉得到 + parse 成功 + 有 item | 没事 |
+| `feed_unreachable` | HTTP 4xx/5xx 或网络错误 | 检查 URL 是不是改了；连续失败考虑删行 |
+| `not_a_feed` | HTTP 200 但响应不是 RSS/Atom（多半是 HTML 落地页） | URL 错了，去站点重找 RSS 入口 |
+| `duplicate` | 与前面某行 URL 完全一致（仅规范化大小写 / 末尾斜杠） | 删一行 |
+
+Skill 拿到 `--json` 输出后，把 `reports` 里 `status != "ok"` 的整理给用户，建议改 `feeds_file` 路径（来自 `my-news paths`）。
+
+**注意**：`doctor` 检测不到"同站不同 URL 但内容雷同"的伪重复（典型陷阱：`hnrss.org/frontpage` 和 `news.ycombinator.com/rss` 都会过 `doctor`，但后者只 metadata）。这种已知组合在 `references/install.md` §III "已知陷阱" 里列了。

@@ -213,8 +213,41 @@ def fetch_items(
     return [_row_to_item(r, tag_map, include_html=False) for r in rows]
 
 
-def fetch_unread(paths: Paths, *, since_seconds: int | None = None) -> list[dict[str, Any]]:
-    return fetch_items(paths, unread_only=True, since_seconds=since_seconds)
+def fetch_unread(
+    paths: Paths,
+    *,
+    since_seconds: int | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    return fetch_items(paths, unread_only=True, since_seconds=since_seconds, limit=limit)
+
+
+def truncate_content(items: list[dict[str, Any]], max_chars: int) -> None:
+    """Truncate each item's content_text to max_chars, flagging the change.
+
+    Mutates items in place. Adds content_text_truncated=True on items whose
+    original content_text exceeded the limit; sets the flag False otherwise.
+    """
+    for item in items:
+        text = item.get("content_text") or ""
+        if len(text) > max_chars:
+            item["content_text"] = text[:max_chars]
+            item["content_text_truncated"] = True
+        else:
+            item["content_text_truncated"] = False
+
+
+def default_summary_max_chars() -> int:
+    """Truncation threshold for --summary-only, overridable via MY_NEWS_SUMMARY_MAX_CHARS."""
+    raw = os.environ.get("MY_NEWS_SUMMARY_MAX_CHARS")
+    if raw:
+        try:
+            n = int(raw)
+            if n > 0:
+                return n
+        except ValueError:
+            pass
+    return 2000
 
 
 _EXTRACTED_CONTENT_SCHEMA = """

@@ -55,6 +55,16 @@ def fetch(
         metavar="DURATION",
         help="Only items with pubDate within DURATION (e.g. 24h, 30m, 7d).",
     ),
+    limit: Optional[int] = typer.Option(
+        None,
+        "--limit",
+        help="Take only the most recent N unread items; mark only those N as read.",
+    ),
+    summary_only: bool = typer.Option(
+        False,
+        "--summary-only",
+        help="Truncate each item's content_text to MY_NEWS_SUMMARY_MAX_CHARS (default 2000).",
+    ),
 ) -> None:
     paths: nb.Paths = ctx.obj
     since_seconds = nb.parse_since(since) if since else None
@@ -63,7 +73,9 @@ def fetch(
     if not no_reload:
         nb.reload_feeds(paths)
 
-    items = nb.fetch_unread(paths, since_seconds=since_seconds)
+    items = nb.fetch_unread(paths, since_seconds=since_seconds, limit=limit)
+    if summary_only:
+        nb.truncate_content(items, nb.default_summary_max_chars())
     by_feed = nb.group_by_feed(items)
     _print_json(
         {
@@ -91,6 +103,11 @@ def list_cmd(
                                         help="Only items within DURATION (e.g. 24h, 7d)."),
     unread_only: bool = typer.Option(False, "--unread-only", help="Restrict to unread items."),
     no_reload: bool = typer.Option(False, "--no-reload", help="Skip newsboat reload; read DB only."),
+    summary_only: bool = typer.Option(
+        False,
+        "--summary-only",
+        help="Truncate each item's content_text to MY_NEWS_SUMMARY_MAX_CHARS (default 2000).",
+    ),
 ) -> None:
     paths: nb.Paths = ctx.obj
     since_seconds = nb.parse_since(since) if since else None
@@ -106,6 +123,8 @@ def list_cmd(
         feed_filter=feed,
         limit=limit,
     )
+    if summary_only:
+        nb.truncate_content(items, nb.default_summary_max_chars())
     by_feed = nb.group_by_feed(items)
     _print_json(
         {
@@ -167,6 +186,27 @@ def feeds(ctx: typer.Context) -> None:
     nb.ensure_feeds_file(paths)
     items = nb.list_feeds(paths)
     _print_json({"count": len(items), "feeds": items})
+
+
+@app.command(
+    help="Probe each configured feed for HTTP/parse health + duplicate URLs.",
+)
+def doctor(
+    ctx: typer.Context,
+    timeout: float = typer.Option(10.0, "--timeout", help="HTTP timeout per feed (seconds)."),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of a human-readable table."),
+) -> None:
+    from . import doctor as doc
+
+    p: nb.Paths = ctx.obj
+    nb.ensure_feeds_file(p)
+    payload = doc.run(p, timeout=timeout)
+    if json_out:
+        _print_json(payload)
+    else:
+        typer.echo(doc.render_table(payload))
+    if doc.has_unreachable(payload):
+        raise typer.Exit(code=1)
 
 
 @app.command(help="Print the resolved config/data paths as JSON.")
@@ -246,11 +286,14 @@ def migrate(
 def main(argv: Optional[list[str]] = None) -> int:
     """Entry point for `my-news = "my_news.cli:main"`."""
     try:
-        app(args=argv, standalone_mode=False)
-    except typer.Exit as e:
-        return int(e.exit_code or 0)
+        app(args=argv)
     except SystemExit as e:
-        return int(e.code or 0)
+        code = e.code
+        if code is None:
+            return 0
+        if isinstance(code, int):
+            return code
+        return 1
     return 0
 
 
