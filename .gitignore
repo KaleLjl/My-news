@@ -9,9 +9,11 @@ wheels/
 # Virtual environments
 .venv
 
-# Runtime data
+# Runtime state (lives in ~/.config/my-news and ~/.local/share/my-news now)
 data/
 digests/
+feeds/
+config/
 
 # Claude Code local state
 .claude/worktrees/
