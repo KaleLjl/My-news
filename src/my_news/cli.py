@@ -209,6 +209,36 @@ def doctor(
         raise typer.Exit(code=1)
 
 
+@app.command(help="Add a feed URL to feeds/urls after verifying it is a valid RSS/Atom feed.")
+def add(
+    ctx: typer.Context,
+    url: str = typer.Argument(..., help="The feed URL to add."),
+    tag: list[str] = typer.Option([], "--tag", help="Tag to attach (repeatable)."),
+    force: bool = typer.Option(False, "--force", help="Skip feed validation and add anyway."),
+    timeout: float = typer.Option(10.0, "--timeout", help="HTTP timeout for validation (seconds)."),
+) -> None:
+    from . import doctor as doc
+
+    paths: nb.Paths = ctx.obj
+    validate_fn = None if force else (lambda u: doc.probe_url(u, timeout=timeout))
+    result = nb.add_feed(paths, url, tag, validate_fn=validate_fn)
+    _print_json(result)
+    if result["status"] != "added":
+        raise typer.Exit(code=1)
+
+
+@app.command(help="Remove a feed URL from feeds/urls.")
+def remove(
+    ctx: typer.Context,
+    url: str = typer.Argument(..., help="The feed URL to remove."),
+) -> None:
+    paths: nb.Paths = ctx.obj
+    result = nb.remove_feed(paths, url)
+    _print_json(result)
+    if result["status"] != "removed":
+        raise typer.Exit(code=1)
+
+
 @app.command(help="Print the resolved config/data paths as JSON.")
 def paths(ctx: typer.Context) -> None:
     p: nb.Paths = ctx.obj

@@ -62,6 +62,19 @@ def _read_urls(urls_path) -> list[tuple[str, list[str]]]:
     return entries
 
 
+def probe_url(url: str, *, timeout: float = 10.0) -> dict[str, Any]:
+    """One-shot probe used by `add`. Returns a dict suitable for JSON output."""
+    report = _probe(url, [], timeout=timeout)
+    return {
+        "ok": report.status == "ok",
+        "status": report.status,
+        "http_status": report.http_status,
+        "content_type": report.content_type,
+        "item_count": report.item_count,
+        "note": report.note,
+    }
+
+
 def _probe(url: str, tags: list[str], *, timeout: float) -> FeedReport:
     report = FeedReport(url=url, tags=tags)
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})

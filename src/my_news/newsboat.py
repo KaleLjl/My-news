@@ -417,6 +417,110 @@ def _read_tag_map(urls_path: Path) -> dict[str, list[str]]:
     return tag_map
 
 
+def _normalize_url(url: str) -> str:
+    u = url.strip().lower()
+    if u.endswith("/"):
+        u = u[:-1]
+    return u
+
+
+def _format_feed_line(url: str, tags: list[str]) -> str:
+    parts = [url.strip()]
+    for tag in tags:
+        cleaned = tag.strip().replace('"', "")
+        if cleaned:
+            parts.append(f'"{cleaned}"')
+    return " ".join(parts)
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def add_feed(
+    paths: Paths,
+    url: str,
+    tags: list[str],
+    *,
+    validate_fn=None,
+) -> dict[str, Any]:
+    """Append a feed URL to feeds/urls. Returns a JSON-shaped status dict.
+
+    validate_fn(url) -> dict with 'ok': bool; called only when not None.
+    Preserves comments, blank lines, and existing entries verbatim.
+    """
+    ensure_feeds_file(paths)
+
+    raw = paths.urls.read_text(encoding="utf-8")
+    lines = raw.splitlines()
+    target_key = _normalize_url(url)
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        tokens = _tokenize_urls_line(stripped)
+        if tokens and _normalize_url(tokens[0]) == target_key:
+            return {"status": "duplicate", "url": url, "existing_line": stripped}
+
+    validated = False
+    if validate_fn is not None:
+        probe = validate_fn(url)
+        if not probe.get("ok"):
+            return {
+                "status": "no_feed_found",
+                "url": url,
+                "probe": probe,
+            }
+        validated = True
+
+    new_line = _format_feed_line(url, tags)
+    needs_leading_nl = bool(raw) and not raw.endswith("\n")
+    new_text = raw + ("\n" if needs_leading_nl else "") + new_line + "\n"
+    _atomic_write(paths.urls, new_text)
+
+    return {
+        "status": "added",
+        "url": url,
+        "tags": [t.strip() for t in tags if t.strip()],
+        "validated": validated,
+    }
+
+
+def remove_feed(paths: Paths, url: str) -> dict[str, Any]:
+    """Remove a feed URL from feeds/urls. Preserves comments and other entries."""
+    if not paths.urls.is_file():
+        return {"status": "not_found", "url": url}
+
+    raw = paths.urls.read_text(encoding="utf-8")
+    lines = raw.splitlines()
+    target_key = _normalize_url(url)
+
+    kept: list[str] = []
+    removed_line: str | None = None
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            tokens = _tokenize_urls_line(stripped)
+            if tokens and _normalize_url(tokens[0]) == target_key:
+                removed_line = stripped
+                continue
+        kept.append(line)
+
+    if removed_line is None:
+        return {"status": "not_found", "url": url}
+
+    new_text = "\n".join(kept)
+    if new_text and not new_text.endswith("\n"):
+        new_text += "\n"
+    _atomic_write(paths.urls, new_text)
+
+    return {"status": "removed", "url": url, "removed_line": removed_line}
+
+
 def _tokenize_urls_line(line: str) -> list[str]:
     """Split a newsboat urls line: URL plus optional "quoted" tags."""
     tokens: list[str] = []

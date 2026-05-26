@@ -91,6 +91,28 @@ my-news show <id|url> [--full] [--refresh]
 my-news feeds
 ```
 
+### `add` — 加一个源
+
+```bash
+my-news add <url> [--tag TAG]... [--force] [--timeout 10]
+```
+
+- 默认会先 HTTP 探测 URL，确认是有效 RSS/Atom feed 才写入
+- `--tag` 可重复，等价于 newsboat urls 文件里的 `"tag1" "tag2"`
+- `--force`：跳过探测直接写入（返回里 `"validated": false`，标明是裸加）
+- 失败返回 JSON + exit 1，状态有 `duplicate` / `no_feed_found`
+- 保留 feeds/urls 里原有的注释和其他订阅，原子写
+
+### `remove` — 删一个源
+
+```bash
+my-news remove <url>
+```
+
+- URL 匹配忽略大小写和尾部 `/`
+- 找不到返回 `{"status": "not_found"}` + exit 1
+- 保留其他订阅和注释
+
 ### `paths` — 查路径（供 skill 自己用）
 
 ```bash
@@ -135,7 +157,8 @@ my-news paths
 | "总结一下 [某条]" | `show <id> --full` 拿完整 `extracted.text` → 用 LLM 总结 |
 | "重新抓一下 X" | `show <id> --full --refresh`（绕过缓存）|
 | "我都订了什么源" | `feeds` |
-| "新加一个源" | 提醒编辑 `my-news paths` 返回的 `feeds_file`（默认 `~/.config/my-news/feeds/urls`，newsboat 格式：URL + 可选 `"tag1" "tag2"`） |
+| "加一个源 / 订阅 X / 加上 https://..." | `add <url> [--tag X]...`；探测失败时报清楚原因，可加 `--force` 裸加 |
+| "取消订阅 X / 删掉这个源" | `remove <url>` |
 
 **关键点**：`fetch` 会"消耗" unread 状态。如果用户只是想浏览/查询/取原文，**优先用 `list` 和 `show`**，不要用 `fetch`。
 
