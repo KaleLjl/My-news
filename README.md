@@ -1,65 +1,65 @@
 # my-news
 
-只看一手资料的个人 RSS 工作流，**给 agent 用，不是给人用**。
+A personal RSS workflow for first-hand sources only — **built for agents, not humans**.
 
-- **CLI**（`my-news`）：用 newsboat 拉源，输出 JSON。不调 LLM、不渲染。纯数据层。
-- **Skill**（`skills/my-news/`）：Claude Code / Hermes / 任意能跑 shell 的 agent 都能挂载，把 CLI 输出整理成中文简报。
+- **CLI** (`my-news`): pulls feeds via newsboat and emits JSON. No LLM calls, no rendering. Pure data layer.
+- **Skill** (`skills/my-news/`): mountable in Claude Code / Hermes / any agent that can run a shell, turns the CLI output into a readable digest.
 
-## 安装
+## Install
 
 ```bash
 npx skills add https://github.com/KaleLjl/my-news.git
 ```
 
-就这一条。第一次在 agent 里触发 skill 时，它会自检 `my-news` CLI 是否就绪，缺啥（`uv` / `newsboat` / CLI 本身）会提示你装。
+That's it. The first time you trigger the skill in an agent, it self-checks whether the `my-news` CLI is ready and prompts you to install anything missing (`uv` / `newsboat` / the CLI itself).
 
-## 用法
+## Usage
 
-装好后直接对 agent 说人话：
+Once installed, just talk to your agent in plain language:
 
-| 你想干啥 | 说法 |
+| What you want | What to say |
 |---|---|
-| 看今天有什么新的 | "看看今天的新闻" / "刷一下" / `/my-news` |
-| 订阅一个源 | "帮我订阅 https://simonwillison.net/atom/everything/" |
-| 取消订阅 | "把 hnrss 这个源删掉" |
-| 罗列某个源 | "列一下 simonw 最近 20 条" |
-| 取单条原文 | "把 id 1042 的原文给我" / "https://... 这篇讲了啥" |
-| 哪个源挂了 | "机器之心好像没数据" → skill 自动跑 `doctor` |
+| See what's new today | "show me today's news" / "give the feeds a refresh" / `/my-news` |
+| Subscribe to a feed | "subscribe me to https://simonwillison.net/atom/everything/" |
+| Unsubscribe | "remove the hnrss feed" |
+| List a single feed | "list simonw's latest 20 items" |
+| Get the full article | "give me the full text of id 1042" / "what does https://... say" |
+| Which feed is broken | "looks like there's no data from machine-learning blog" → skill runs `doctor` automatically |
 
-简报会写一份到 `~/.local/share/my-news/digests/<时间戳>.md`，方便回看或被脚本推送。
+The digest is written to `~/.local/share/my-news/digests/<timestamp>.md` for later review or for scripts to push elsewhere.
 
-## 直接用 CLI
+## Use the CLI directly
 
-不走 agent 也行：
+You don't have to go through an agent:
 
 ```bash
 my-news add https://simonwillison.net/atom/everything/ --tag blog
-my-news fetch                  # 输出未读 JSON 并标已读
-my-news list --feed simon      # 翻缓存，不动 unread
-my-news show 1042 --full       # 取单条全文（trafilatura 抓网页正文）
-my-news doctor                 # 源健康检查
-my-news --help                 # 看所有命令
+my-news fetch                  # emit unread items as JSON and mark them read
+my-news list --feed simon      # read the cache without touching unread state
+my-news show 1042 --full       # fetch a single item's full text (trafilatura extracts the article body)
+my-news doctor                 # feed health check
+my-news --help                 # see all commands
 ```
 
-所有命令输出 JSON，stdout 是数据、stderr 是状态，符合 agent-native CLI 惯例。
+Every command emits JSON — stdout is data, stderr is status — following the agent-native CLI convention.
 
-## 文件位置
+## File locations
 
-| 路径 | 作用 |
+| Path | Purpose |
 |---|---|
-| `~/.config/my-news/feeds/urls` | 订阅列表（newsboat 格式） |
-| `~/.local/share/my-news/cache.db` | newsboat + trafilatura 缓存 |
-| `~/.local/share/my-news/digests/` | Skill 写的简报 markdown |
+| `~/.config/my-news/feeds/urls` | Subscription list (newsboat format) |
+| `~/.local/share/my-news/cache.db` | newsboat + trafilatura cache |
+| `~/.local/share/my-news/digests/` | Digest markdown written by the skill |
 
-环境变量 `MY_NEWS_CONFIG` / `MY_NEWS_DATA` 可覆盖默认位置。
+The `MY_NEWS_CONFIG` / `MY_NEWS_DATA` environment variables override the default locations.
 
-## 设计原则
+## Design principles
 
-- **CLI 不调 LLM**：花 token 的事在 Skill 这一层
-- **JSON-first 输出**：方便 agent 消费，人也能看
-- **状态走 XDG 用户目录**：和仓库解耦，agent-agnostic
+- **The CLI never calls an LLM**: anything that spends tokens lives in the skill layer
+- **JSON-first output**: easy for agents to consume, still readable by humans
+- **State lives in XDG user directories**: decoupled from the repo, agent-agnostic
 
-## 开发
+## Development
 
 ```bash
 git clone https://github.com/KaleLjl/my-news.git
@@ -67,7 +67,7 @@ cd my-news && uv sync
 uv run my-news --help
 ```
 
-详细安装/排错（Ubuntu 24.04 snap workaround、Hermes 部署等）见 [install.md](skills/my-news/references/install.md)。
+For detailed install/troubleshooting notes (Ubuntu 24.04 snap workaround, Hermes deployment, etc.) see [install.md](skills/my-news/references/install.md).
 
 ## License
 
